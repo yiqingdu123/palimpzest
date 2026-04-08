@@ -31,6 +31,9 @@ class QueryProcessorConfig(BaseModel):
     reasoning_effort: str = Field(default="default")  # Gemini: "disable", "low", "medium", "high"
     use_vertex: bool = Field(default=False)  # Whether to use Vertex models for Gemini or Google models
     use_azure: bool = Field(default=False)  # Whether to use Azure for OpenAI models
+    use_ollama: bool = Field(default=False)  # Whether to include locally hosted Ollama models
+    ollama_models: list[str] | None = Field(default=None)  # e.g. ["ollama/llama3.2:3b"]
+    ollama_api_base: str = Field(default="http://localhost:11434")  # Ollama base URL
     gemini_credentials_path: str | None = Field(default=None)  # Path to Gemini credentials file
     azure_endpoint: str | None = Field(default=None)  # Azure endpoint URL (AZURE_API_BASE)
     azure_api_version: str | None = Field(default=None)  # Azure API version

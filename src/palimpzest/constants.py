@@ -214,6 +214,8 @@ class Model:
 
     def _get_litellm_model_specs(self, model_id: str) -> dict:
         """Get model specs from litellm's local model_cost data for vLLM models."""
+        provider = model_id.split("/")[0] if "/" in model_id else "hosted_vllm"
+
         # Use predict function to get quality, latency metrics, and capability flags
         predicted_metrics = predict_local_model_metrics(model_id)
 
@@ -228,6 +230,7 @@ class Model:
             "is_embedding_model": False,
             "is_text_image_multimodal_embedding_model": False,
             "is_vllm_model": True,  # Mark as vLLM model
+            "provider": provider,
             "usd_per_input_token": 0.0,  # Cost always 0 for local model
             "usd_per_output_token": 0.0,
             "seconds_per_output_token": predicted_metrics["seconds_per_output_token"],

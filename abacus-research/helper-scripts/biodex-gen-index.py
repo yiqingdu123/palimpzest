@@ -3,6 +3,7 @@ import time
 
 import chromadb
 import chromadb.utils.embedding_functions as embedding_functions
+import datasets
 import numpy as np
 from openai import OpenAI
 from tqdm import tqdm
@@ -14,23 +15,44 @@ if __name__ == "__main__":
 
     # load reaction terms
     reaction_terms = []
-    with open("testdata/reaction_terms.txt") as f:
-        for line in f:
-            reaction_terms.append(line.strip())
+    reaction_terms_path = "testdata/reaction_terms.txt"
+    if os.path.exists(reaction_terms_path):
+        with open(reaction_terms_path) as f:
+            for line in f:
+                term = line.strip()
+                if term:
+                    reaction_terms.append(term)
+    else:
+        print("testdata/reaction_terms.txt not found; deriving terms from BioDEX dataset...")
+        ds = datasets.load_dataset("BioDEX/BioDEX-Reactions", split="train")
+        reaction_terms_set = set()
+        for entry in ds:
+            for term in entry["reactions"].split(","):
+                normalized = term.strip().lower().replace("'", "").replace("^", "")
+                if normalized:
+                    reaction_terms_set.add(normalized)
+        reaction_terms = sorted(reaction_terms_set)
+
+        # persist for future runs
+        os.makedirs("testdata", exist_ok=True)
+        with open(reaction_terms_path, "w") as f:
+            for term in reaction_terms:
+                f.write(f"{term}\n")
+
+    if len(reaction_terms) == 0:
+        raise ValueError("No reaction terms were loaded/generated.")
 
     # create directory for embeddings
     os.makedirs("testdata/reaction-term-embeddings/", exist_ok=True)
 
     # generate embeddings in batches of 1000 at a time
-    indices = np.linspace(0, len(reaction_terms), len(reaction_terms)//1000, dtype=int)
-    total_embeds = len(indices)
+    batch_size = 1000
+    batch_ranges = [(start_idx, min(start_idx + batch_size, len(reaction_terms))) for start_idx in range(0, len(reaction_terms), batch_size)]
+    total_embeds = len(batch_ranges)
     print(f"Generating {total_embeds} embeddings...")
-    gen_indices = []
-    for iter_idx, start_idx in tqdm(enumerate(indices), total=total_embeds):
-        # check if embedding needs to be computed
-        end_idx = indices[iter_idx + 1] if iter_idx + 1 < len(indices) else None
+    for start_idx, end_idx in tqdm(batch_ranges, total=total_embeds):
         filename = f"testdata/reaction-term-embeddings/{start_idx}_{end_idx}.npy"
-        if end_idx is not None and not os.path.exists(filename):
+        if not os.path.exists(filename):
             # generate embeddings
             batch = reaction_terms[start_idx:end_idx]
             resp = openai_client.embeddings.create(input=batch, model="text-embedding-3-small")
@@ -40,7 +62,6 @@ if __name__ == "__main__":
             with open(filename, "wb") as f:
                 np.save(f, np.array(embeddings))
 
-            gen_indices.append((start_idx, end_idx))
             time.sleep(1)
     print("Done generating embeddings.")
 
@@ -61,9 +82,9 @@ if __name__ == "__main__":
     )
 
     # insert documents in batches
-    total_inserts = len(gen_indices)
+    total_inserts = len(batch_ranges)
     print(f"Inserting {total_inserts} batches into the collection...")
-    for start_idx, end_idx in tqdm(gen_indices, total=total_inserts):
+    for start_idx, end_idx in tqdm(batch_ranges, total=total_inserts):
         embeddings = np.load(f"testdata/reaction-term-embeddings/{start_idx}_{end_idx}.npy")
         collection.add(
             documents=reaction_terms[start_idx:end_idx],

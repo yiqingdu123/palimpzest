@@ -84,6 +84,19 @@ class QueryProcessorFactory:
                 azure_api_version = config.azure_api_version,
             )
 
+        # optionally append locally hosted Ollama models
+        ollama_models = getattr(config, "ollama_models", None) or []
+        if getattr(config, "use_ollama", False) and len(ollama_models) == 0:
+            raise ValueError("`use_ollama=True` requires at least one model in `ollama_models`.")
+
+        if len(ollama_models) > 0:
+            for model_id in ollama_models:
+                if not isinstance(model_id, str):
+                    raise ValueError("Each entry in `ollama_models` must be a string model id.")
+                local_model = Model(model_id, api_base=config.ollama_api_base)
+                if local_model not in current_available_models:
+                    current_available_models.append(local_model)
+
         # get the list of models to remove (if provided by the user's config)
         remove_models = getattr(config, 'remove_models', [])
 
@@ -143,7 +156,7 @@ class QueryProcessorFactory:
 
         vllm_models = [model for model in config.available_models if model.is_vllm_model()]
         if len(vllm_models) > 1:
-            raise ValueError("Only one vLLM model can be used per run. Multiple vLLM models found in available_models.")
+            raise ValueError("Only one local API-backed model can be used per run. Multiple such models found in available_models.")
 
         for model in config.available_models:
             if model.is_provider_openai() and not openai_key:

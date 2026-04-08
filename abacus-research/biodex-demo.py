@@ -5,6 +5,7 @@ import time
 
 import chromadb
 import datasets
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
 
 import palimpzest as pz
@@ -28,6 +29,31 @@ biodex_reaction_labels_cols = [
 biodex_ranked_reactions_labels_cols = [
     {"name": "ranked_reaction_labels", "type": list[str], "desc": "The ranked list of medical conditions experienced by the patient. The most relevant label occurs first in the list. Be sure to rank ALL of the inputs."},
 ]
+
+
+def load_reaction_terms() -> list[str]:
+    """Load reaction terms from file or derive from BioDEX train split."""
+    reaction_terms_path = "testdata/reaction_terms.txt"
+    if os.path.exists(reaction_terms_path):
+        with open(reaction_terms_path) as f:
+            terms = [line.strip() for line in f if line.strip()]
+        if len(terms) > 0:
+            return terms
+
+    ds = datasets.load_dataset("BioDEX/BioDEX-Reactions", split="train")
+    reaction_terms_set = set()
+    for entry in ds:
+        for term in entry["reactions"].split(","):
+            normalized = term.strip().lower().replace("'", "").replace("^", "")
+            if normalized:
+                reaction_terms_set.add(normalized)
+
+    terms = sorted(reaction_terms_set)
+    os.makedirs("testdata", exist_ok=True)
+    with open(reaction_terms_path, "w") as f:
+        for term in terms:
+            f.write(f"{term}\n")
+    return terms
 
 class BiodexValidator(pz.Validator):
     def __init__(
@@ -192,6 +218,8 @@ if __name__ == "__main__":
     parser.add_argument("--progress", default=False, action="store_true", help="Print progress output")
     parser.add_argument("--constrained", default=False, action="store_true", help="Use constrained objective")
     parser.add_argument("--gpt4-mini-only", default=False, action="store_true", help="Use only GPT-4o-mini")
+    parser.add_argument("--openai-only", default=False, action="store_true", help="Use only OpenAI models")
+    parser.add_argument("--local-only", default=False, action="store_true", help="Use only local model(s) for LLM operators")
     parser.add_argument(
         "--execution-strategy",
         default="parallel",
@@ -247,6 +275,12 @@ if __name__ == "__main__":
         help="Total sample budget in Random Sampling or MAB sentinel execution",
     )
     parser.add_argument(
+        "--max-workers",
+        default=8,
+        type=int,
+        help="Max concurrent workers for query execution.",
+    )
+    parser.add_argument(
         "--exp-name",
         default=None,
         type=str,
@@ -264,6 +298,43 @@ if __name__ == "__main__":
         type=float,
         help="Quality threshold",
     )
+    parser.add_argument(
+        "--use-ollama",
+        default=False,
+        action="store_true",
+        help="Include a local Ollama model in available models.",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        default="ollama/llama3.2:3b",
+        type=str,
+        help="Local Ollama model identifier.",
+    )
+    parser.add_argument(
+        "--ollama-api-base",
+        default="http://localhost:11434",
+        type=str,
+        help="Base URL for local Ollama server.",
+    )
+    parser.add_argument(
+        "--topk-embedding-provider",
+        default="openai",
+        choices=["openai", "local"],
+        type=str,
+        help="Embedding provider for TopK retrieval.",
+    )
+    parser.add_argument(
+        "--topk-openai-embedding-model",
+        default="text-embedding-3-small",
+        type=str,
+        help="OpenAI embedding model name when --topk-embedding-provider=openai.",
+    )
+    parser.add_argument(
+        "--topk-local-embedding-model",
+        default="all-MiniLM-L6-v2",
+        type=str,
+        help="SentenceTransformer model name when --topk-embedding-provider=local.",
+    )
 
     args = parser.parse_args()
 
@@ -277,6 +348,7 @@ if __name__ == "__main__":
     k = args.k
     j = args.j
     sample_budget = args.sample_budget
+    max_workers = args.max_workers
     execution_strategy = args.execution_strategy
     sentinel_execution_strategy = args.sentinel_execution_strategy
     exp_name = (
@@ -321,13 +393,32 @@ if __name__ == "__main__":
     )
     train_dataset = {train_dataset.id: train_dataset}
 
-    # load index [text-embedding-3-small]
+    # load index for TopK retrieval
     chroma_client = chromadb.PersistentClient(".chroma-biodex")
-    openai_ef = OpenAIEmbeddingFunction(
-        api_key=os.environ["OPENAI_API_KEY"],
-        model_name="text-embedding-3-small",
-    )
-    index = chroma_client.get_collection("biodex-reaction-terms", embedding_function=openai_ef)
+    if args.topk_embedding_provider == "openai":
+        openai_ef = OpenAIEmbeddingFunction(
+            api_key=os.environ["OPENAI_API_KEY"],
+            model_name=args.topk_openai_embedding_model,
+        )
+        index = chroma_client.get_collection("biodex-reaction-terms", embedding_function=openai_ef)
+    else:
+        local_ef = SentenceTransformerEmbeddingFunction(model_name=args.topk_local_embedding_model)
+        collection_name = "biodex-reaction-terms-local"
+        index = chroma_client.get_or_create_collection(
+            collection_name,
+            embedding_function=local_ef,
+            metadata={"hnsw:space": "cosine"},
+        )
+        if index.count() == 0:
+            reaction_terms = load_reaction_terms()
+            # Chroma has a max batch size; insert in chunks to avoid InternalError.
+            batch_size = 5000
+            for start_idx in range(0, len(reaction_terms), batch_size):
+                end_idx = min(start_idx + batch_size, len(reaction_terms))
+                index.add(
+                    documents=reaction_terms[start_idx:end_idx],
+                    ids=[f"id{idx}" for idx in range(start_idx, end_idx)],
+                )
 
     def search_func(index: chromadb.Collection, query: list[list[float]], k: int) -> list[str]:
         # execute query with embeddings
@@ -366,14 +457,24 @@ if __name__ == "__main__":
     plan = plan.sem_map(biodex_ranked_reactions_labels_cols, depends_on=["title", "abstract", "fulltext", "reaction_labels"])
 
     # set models
-    models = [Model.GPT_4o_MINI] if args.gpt4_mini_only else [
-        Model.GPT_4o,
-        Model.GPT_4o_MINI,
-        Model.LLAMA3_1_8B,
-        Model.LLAMA3_3_70B,
-        # Model.MIXTRAL,  # NOTE: only available in tag `abacus-paper-experiments`
-        Model.DEEPSEEK_R1_DISTILL_QWEN_1_5B,
-    ]
+    if args.local_only and not args.use_ollama:
+        raise ValueError("--local-only requires --use-ollama with a valid --ollama-model.")
+
+    if args.local_only:
+        models = [Model(args.ollama_model, api_base=args.ollama_api_base)]
+    elif args.gpt4_mini_only:
+        models = [Model.GPT_4o_MINI]
+    elif args.openai_only:
+        models = [Model.GPT_4o, Model.GPT_4o_MINI]
+    else:
+        models = [
+            Model.GPT_4o,
+            Model.GPT_4o_MINI,
+            Model.LLAMA3_1_8B,
+            Model.LLAMA3_3_70B,
+            # Model.MIXTRAL,  # NOTE: only available in tag `abacus-paper-experiments`
+            Model.DEEPSEEK_R1_DISTILL_QWEN_1_5B,
+        ]
 
     # execute pz plan
     config = pz.QueryProcessorConfig(
@@ -382,7 +483,7 @@ if __name__ == "__main__":
         sentinel_execution_strategy=sentinel_execution_strategy,
         execution_strategy=execution_strategy,
         use_final_op_quality=True,
-        max_workers=64,
+        max_workers=max_workers,
         verbose=verbose,
         available_models=models,
         allow_bonded_query=True,
@@ -397,6 +498,9 @@ if __name__ == "__main__":
         seed=seed,
         exp_name=exp_name,
         priors=priors,
+        use_ollama=args.use_ollama,
+        ollama_models=[args.ollama_model] if args.use_ollama else None,
+        ollama_api_base=args.ollama_api_base,
     )
 
     data_record_collection = plan.optimize_and_run(config=config, train_dataset=train_dataset, validator=validator)
