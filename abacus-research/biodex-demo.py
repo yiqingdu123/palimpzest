@@ -360,6 +360,56 @@ if __name__ == "__main__":
         type=str,
         help="SentenceTransformer model name when --topk-embedding-provider=local.",
     )
+    parser.add_argument(
+        "--sampling-strategy",
+        default="random",
+        choices=["random", "embedding_hybrid"],
+        type=str,
+        help="Sampling strategy for sentinel record ordering.",
+    )
+    parser.add_argument(
+        "--sampling-embedding-provider",
+        default="openai",
+        choices=["openai", "local"],
+        type=str,
+        help="Embedding provider used by embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-embedding-model",
+        default="openai/text-embedding-3-small",
+        type=str,
+        help="Embedding model used by embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-alpha",
+        default=0.7,
+        type=float,
+        help="Weight for embedding diversity in embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-beta",
+        default=0.3,
+        type=float,
+        help="Weight for length signal in embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-gamma",
+        default=0.0,
+        type=float,
+        help="Weight for difficulty proxy in embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-embedding-batch-size",
+        default=128,
+        type=int,
+        help="Embedding batch size for embedding-hybrid sampling.",
+    )
+    parser.add_argument(
+        "--sampling-cache-dir",
+        default=None,
+        type=str,
+        help="Optional cache directory for sampling embeddings.",
+    )
 
     args = parser.parse_args()
 
@@ -531,6 +581,14 @@ if __name__ == "__main__":
         seed=seed,
         exp_name=exp_name,
         priors=priors,
+        sampling_strategy=args.sampling_strategy,
+        sampling_embedding_provider=args.sampling_embedding_provider,
+        sampling_embedding_model=args.sampling_embedding_model,
+        sampling_alpha=args.sampling_alpha,
+        sampling_beta=args.sampling_beta,
+        sampling_gamma=args.sampling_gamma,
+        sampling_embedding_batch_size=args.sampling_embedding_batch_size,
+        sampling_cache_dir=args.sampling_cache_dir,
         use_ollama=args.use_ollama,
         ollama_models=ollama_models_arg,
         ollama_api_base=args.ollama_api_base,

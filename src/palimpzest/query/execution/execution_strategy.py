@@ -92,6 +92,14 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         seed: int = 42,
         exp_name: str | None = None,
         dont_use_priors: bool = False,
+        sampling_strategy: str = "random",
+        sampling_embedding_provider: str = "openai",
+        sampling_embedding_model: str = "openai/text-embedding-3-small",
+        sampling_alpha: float = 0.7,
+        sampling_beta: float = 0.3,
+        sampling_gamma: float = 0.0,
+        sampling_embedding_batch_size: int = 128,
+        sampling_cache_dir: str | None = None,
         stratify_source_indices_by_difficulty: bool = False,
         difficulty_proxy: str = "token_density",
         stratify_difficulty_text_column: str = "abstract",
@@ -119,6 +127,14 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         self.ollama_disagreement_task_instruction = ollama_disagreement_task_instruction
         self.ollama_models = ollama_models
         self.ollama_api_base = ollama_api_base
+        self.sampling_strategy = sampling_strategy
+        self.sampling_embedding_provider = sampling_embedding_provider
+        self.sampling_embedding_model = sampling_embedding_model
+        self.sampling_alpha = sampling_alpha
+        self.sampling_beta = sampling_beta
+        self.sampling_gamma = sampling_gamma
+        self.sampling_embedding_batch_size = sampling_embedding_batch_size
+        self.sampling_cache_dir = sampling_cache_dir
 
         # general cache which maps hash(logical_op_id, phys_op_id, hash(input)) --> record_set
         self.cache: dict[int, DataRecordSet] = {}
