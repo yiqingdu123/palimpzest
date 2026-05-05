@@ -315,6 +315,12 @@ if __name__ == "__main__":
         help="Include a local Ollama model in available models.",
     )
     parser.add_argument(
+        "--cascade",
+        default=False,
+        action="store_true",
+        help="Enable cascade: use local model as primary and remote as fallback.",
+    )
+    parser.add_argument(
         "--ollama-model",
         default="ollama/llama3.2:3b",
         type=str,
@@ -603,10 +609,14 @@ if __name__ == "__main__":
         use_ollama=args.use_ollama,
         ollama_models=ollama_models_arg,
         ollama_api_base=args.ollama_api_base,
+<<<<<<< Updated upstream
         allow_cascade=args.use_ollama,
         stratify_source_indices_by_difficulty=args.stratify_by_difficulty,
         difficulty_proxy=args.difficulty_proxy,
         stratify_difficulty_text_column=args.stratify_text_column,
+=======
+        allow_cascade=args.cascade,
+>>>>>>> Stashed changes
     )
 
     data_record_collection = plan.optimize_and_run(config=config, train_dataset=train_dataset, validator=validator)
