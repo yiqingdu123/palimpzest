@@ -311,13 +311,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--sampling-alpha",
-        default=0.7,
+        default=0.0,
         type=float,
         help="Weight for embedding diversity in embedding-hybrid sampling.",
     )
     parser.add_argument(
         "--sampling-beta",
-        default=0.3,
+        default=0.0,
         type=float,
         help="Weight for length signal in embedding-hybrid sampling.",
     )
