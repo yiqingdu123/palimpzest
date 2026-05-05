@@ -155,8 +155,8 @@ class QueryProcessorFactory:
         google_key = os.getenv("GOOGLE_API_KEY")
 
         vllm_models = [model for model in config.available_models if model.is_vllm_model()]
-        if len(vllm_models) > 1:
-            raise ValueError("Only one local API-backed model can be used per run. Multiple such models found in available_models.")
+        if len(vllm_models) > 1 and not config.allow_cascade:
+            raise ValueError("Only one local API-backed model can be used per run. Multiple such models found in available_models. Set allow_cascade=True to use multiple local models in a cascade.")
 
         for model in config.available_models:
             if model.is_provider_openai() and not openai_key:

@@ -29,6 +29,7 @@ from palimpzest.query.optimizer.optimizer_strategy_type import OptimizationStrat
 from palimpzest.query.optimizer.plan import PhysicalPlan
 from palimpzest.query.optimizer.primitives import Group, LogicalExpression
 from palimpzest.query.optimizer.rules import (
+    CascadeConvertRule,
     CritiqueAndRefineRule,
     LLMConvertBondedRule,
     MixtureOfAgentsRule,
@@ -74,6 +75,7 @@ class Optimizer:
         allow_mixtures: bool = True,
         allow_critic: bool = False,
         allow_split_merge: bool = False,
+        allow_cascade: bool = False,
         optimizer_strategy: OptimizationStrategyType = OptimizationStrategyType.PARETO,
         execution_strategy: ExecutionStrategyType = ExecutionStrategyType.PARALLEL,
         use_final_op_quality: bool = False,
@@ -114,6 +116,7 @@ class Optimizer:
             self.allow_mixtures = False
             self.allow_critic = False
             self.allow_split_merge = False
+            self.allow_cascade = False
             self.available_models = [available_models[0]]
 
         # store optimization hyperparameters
@@ -126,6 +129,7 @@ class Optimizer:
         self.allow_mixtures = allow_mixtures
         self.allow_critic = allow_critic
         self.allow_split_merge = allow_split_merge
+        self.allow_cascade = allow_cascade
         self.optimizer_strategy = optimizer_strategy
         self.execution_strategy = execution_strategy
         self.use_final_op_quality = use_final_op_quality
@@ -158,6 +162,11 @@ class Optimizer:
                 rule for rule in self.implementation_rules if not issubclass(rule, SplitRule)
             ]
 
+        if not self.allow_cascade:
+            self.implementation_rules = [
+                rule for rule in self.implementation_rules if not issubclass(rule, CascadeConvertRule)
+            ]
+
         logger.info(f"Initialized Optimizer with verbose={self.verbose}")
         logger.debug(f"Initialized Optimizer with params: {self.__dict__}")
 
@@ -186,6 +195,7 @@ class Optimizer:
             allow_mixtures=self.allow_mixtures,
             allow_critic=self.allow_critic,
             allow_split_merge=self.allow_split_merge,
+            allow_cascade=self.allow_cascade,
             optimizer_strategy=self.optimizer_strategy,
             execution_strategy=self.execution_strategy,
             use_final_op_quality=self.use_final_op_quality,

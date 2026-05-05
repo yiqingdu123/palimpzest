@@ -6,6 +6,9 @@ from palimpzest.query.optimizer.rules import (
     BasicSubstitutionRule as _BasicSubstitutionRule,
 )
 from palimpzest.query.optimizer.rules import (
+    CascadeConvertRule as _CascadeConvertRule,
+)
+from palimpzest.query.optimizer.rules import (
     CritiqueAndRefineRule as _CritiqueAndRefineRule,
 )
 from palimpzest.query.optimizer.rules import (
@@ -64,6 +67,7 @@ ALL_RULES = [
     _AddContextsBeforeComputeRule,
     _AggregateRule,
     _BasicSubstitutionRule,
+    _CascadeConvertRule,
     _CritiqueAndRefineRule,
     _EmbeddingJoinRule,
     _ImplementationRule,
@@ -95,8 +99,11 @@ TRANSFORMATION_RULES = [
     rule for rule in ALL_RULES if issubclass(rule, _TransformationRule) and rule not in [_TransformationRule]
 ]
 
+CascadeConvertRule = _CascadeConvertRule
+
 __all__ = [
     "ALL_RULES",
     "IMPLEMENTATION_RULES",
     "TRANSFORMATION_RULES",
+    "CascadeConvertRule",
 ]

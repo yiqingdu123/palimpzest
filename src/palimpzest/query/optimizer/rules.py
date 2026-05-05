@@ -22,7 +22,7 @@ from palimpzest.query.operators.aggregate import (
     SumAggregateOp,
 )
 from palimpzest.query.operators.compute import SmolAgentsCompute
-from palimpzest.query.operators.convert import LLMConvertBonded, NonLLMConvert
+from palimpzest.query.operators.convert import CascadeConvertOp, LLMConvertBonded, NonLLMConvert
 from palimpzest.query.operators.critique_and_refine import CritiqueAndRefineConvert, CritiqueAndRefineFilter
 from palimpzest.query.operators.distinct import DistinctOp
 from palimpzest.query.operators.filter import LLMFilter, NonLLMFilter
@@ -650,6 +650,54 @@ class LLMConvertBondedRule(ImplementationRule):
             )
 
         return cls._perform_substitution(logical_expression, LLMConvertBonded, runtime_kwargs, variable_op_kwargs)
+
+
+class CascadeConvertRule(ImplementationRule):
+    """
+    Substitute a ConvertScan with a CascadeConvertOp that first tries a cheap
+    local (vLLM/Ollama) model and escalates to a more capable remote model when
+    the local model's output is incomplete.
+
+    A cascade pair is created for every (local_model, remote_model) combination
+    where local_model.is_vllm_model() is True and remote_model is not a vLLM
+    model.  Both models must be capable of handling the operator's input modality.
+    """
+
+    @classmethod
+    def matches_pattern(cls, logical_expression: LogicalExpression) -> bool:
+        is_match = isinstance(logical_expression.operator, ConvertScan) and logical_expression.operator.udf is None
+        logger.debug(f"CascadeConvertRule matches_pattern: {is_match} for {logical_expression}")
+        return is_match
+
+    @classmethod
+    def substitute(cls, logical_expression: LogicalExpression, **runtime_kwargs) -> set[PhysicalExpression]:
+        logger.debug(f"Substituting CascadeConvertRule for {logical_expression}")
+
+        available_models: list[Model] = runtime_kwargs["available_models"]
+        reasoning_prompt_strategy = use_reasoning_prompt(runtime_kwargs["reasoning_effort"])
+        prompt_strategy = PromptStrategy.MAP if reasoning_prompt_strategy else PromptStrategy.MAP_NO_REASONING
+
+        compatible_models = [m for m in available_models if cls._model_matches_input(m, logical_expression)]
+        local_models = [m for m in compatible_models if m.is_vllm_model()]
+        remote_models = [m for m in compatible_models if not m.is_vllm_model()]
+
+        if not local_models or not remote_models:
+            return set()
+
+        variable_op_kwargs = []
+        for local_model in local_models:
+            for remote_model in remote_models:
+                variable_op_kwargs.append(
+                    {
+                        "model": local_model,
+                        "prompt_strategy": prompt_strategy,
+                        "reasoning_effort": runtime_kwargs["reasoning_effort"],
+                        "fallback_model": remote_model,
+                        "fallback_prompt_strategy": prompt_strategy,
+                    }
+                )
+
+        return cls._perform_substitution(logical_expression, CascadeConvertOp, runtime_kwargs, variable_op_kwargs)
 
 
 class RAGRule(ImplementationRule):

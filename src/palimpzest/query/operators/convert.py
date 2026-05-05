@@ -370,3 +370,102 @@ class LLMConvertBonded(LLMConvert):
                     generation_stats += single_field_stats
 
         return field_answers, generation_stats
+
+
+class CascadeConvertOp(LLMConvert):
+    """
+    A convert operator that runs a cheap local model first and escalates to a
+    more capable remote model only when the local model's output appears to be
+    of insufficient quality.
+
+    Quality is assessed by checking whether every generated field has a non-None
+    value.  If any field is missing the operator retries with the fallback model.
+    """
+
+    def __init__(
+        self,
+        fallback_model: Model,
+        fallback_prompt_strategy: PromptStrategy = PromptStrategy.MAP,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.fallback_model = fallback_model
+        self.fallback_prompt_strategy = fallback_prompt_strategy
+        self.fallback_generator = Generator(
+            fallback_model,
+            fallback_prompt_strategy,
+            self.reasoning_effort,
+            self.cardinality,
+            self.desc,
+            self.verbose,
+        )
+
+    def get_id_params(self):
+        id_params = super().get_id_params()
+        id_params["fallback_model"] = self.fallback_model.value
+        id_params["fallback_prompt_strategy"] = self.fallback_prompt_strategy.value
+        return id_params
+
+    def get_op_params(self):
+        op_params = super().get_op_params()
+        op_params["fallback_model"] = self.fallback_model
+        op_params["fallback_prompt_strategy"] = self.fallback_prompt_strategy
+        return op_params
+
+    def get_model_name(self):
+        return f"{self.model.value}→{self.fallback_model.value}"
+
+    def naive_cost_estimates(self, source_op_cost_estimates: OperatorCostEstimates) -> OperatorCostEstimates:
+        base = super().naive_cost_estimates(source_op_cost_estimates)
+        # Assume the fallback is invoked ~20 % of the time (optimistic).
+        # Cost/time blend: 80 % cheap + 20 % expensive.
+        fallback_time = self.fallback_model.get_seconds_per_output_token() * NAIVE_EST_NUM_OUTPUT_TOKENS
+        fallback_cost = (
+            self.fallback_model.get_usd_per_input_token() * NAIVE_EST_NUM_INPUT_TOKENS
+            + self.fallback_model.get_usd_per_output_token() * NAIVE_EST_NUM_OUTPUT_TOKENS
+        )
+        escalation_rate = 0.2
+        blended_time = (1 - escalation_rate) * base.time_per_record + escalation_rate * fallback_time
+        blended_cost = (1 - escalation_rate) * base.cost_per_record + escalation_rate * fallback_cost
+        # Quality is the fallback model's quality (worst-case path is always correct).
+        fallback_quality = self.fallback_model.get_overall_score() / 100.0
+        return OperatorCostEstimates(
+            cardinality=base.cardinality,
+            time_per_record=blended_time,
+            cost_per_record=blended_cost,
+            quality=fallback_quality,
+        )
+
+    @staticmethod
+    def _answers_are_complete(field_answers: dict[str, list]) -> bool:
+        """Return True if every field has at least one non-None value."""
+        return all(
+            answers is not None and len(answers) > 0 and any(v is not None for v in answers)
+            for answers in field_answers.values()
+        )
+
+    def convert(self, candidate: DataRecord, fields: dict[str, FieldInfo]) -> tuple[dict[str, list], GenerationStats]:
+        input_fields = self.get_input_fields()
+        gen_kwargs = {"project_cols": input_fields, "output_schema": self.output_schema}
+
+        # --- primary (cheap) model attempt ---
+        field_answers, _, generation_stats, _ = self.generator(candidate, fields, **gen_kwargs)
+
+        if self._answers_are_complete(field_answers):
+            return field_answers, generation_stats
+
+        # --- escalate to fallback model ---
+        if self.verbose:
+            print(f"[CascadeConvertOp] Primary model {self.model.value} produced incomplete output; escalating to {self.fallback_model.value}")
+
+        fallback_answers, _, fallback_stats, _ = self.fallback_generator(candidate, fields, **gen_kwargs)
+        generation_stats += fallback_stats
+
+        # merge: use fallback answer for any field that was missing
+        for field_name, answers in fallback_answers.items():
+            primary = field_answers.get(field_name)
+            if primary is None or len(primary) == 0 or all(v is None for v in primary):
+                field_answers[field_name] = answers
+
+        return field_answers, generation_stats

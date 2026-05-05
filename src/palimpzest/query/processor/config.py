@@ -45,6 +45,7 @@ class QueryProcessorConfig(BaseModel):
     allow_mixtures: bool = Field(default=True)
     allow_critic: bool = Field(default=True)
     allow_split_merge: bool = Field(default=False)
+    allow_cascade: bool = Field(default=False)
     use_final_op_quality: bool = Field(default=False)
 
     # sentinel optimization flags

@@ -501,6 +501,7 @@ if __name__ == "__main__":
         use_ollama=args.use_ollama,
         ollama_models=[args.ollama_model] if args.use_ollama else None,
         ollama_api_base=args.ollama_api_base,
+        allow_cascade=args.use_ollama,
     )
 
     data_record_collection = plan.optimize_and_run(config=config, train_dataset=train_dataset, validator=validator)

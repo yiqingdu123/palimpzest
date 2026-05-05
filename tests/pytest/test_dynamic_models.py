@@ -701,7 +701,7 @@ class TestVLLMModelSupport:
             available_models=[model1, model2],
         )
 
-        with pytest.raises(ValueError, match="Only one vLLM model"):
+        with pytest.raises(ValueError, match="Only one local API-backed model"):
             QueryProcessorFactory.create_processor(mock_dataset, config=config)
 
     # --- Generator vLLM kwargs ---
