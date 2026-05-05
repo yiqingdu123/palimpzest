@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -58,6 +59,16 @@ def _build_texts(dataset: Dataset, source_indices: list[str]) -> list[str]:
     return texts
 
 
+def _build_rows_and_texts(dataset: Dataset, source_indices: list[str]) -> tuple[list[object], list[str]]:
+    rows, texts = [], []
+    for source_idx in source_indices:
+        row_idx = int(str(source_idx).split("---")[-1])
+        row = dataset[row_idx]
+        rows.append(row)
+        texts.append(_record_to_text(row))
+    return rows, texts
+
+
 def _zscore(arr: np.ndarray) -> np.ndarray:
     std = np.std(arr)
     if std == 0.0:
@@ -65,14 +76,87 @@ def _zscore(arr: np.ndarray) -> np.ndarray:
     return (arr - np.mean(arr)) / std
 
 
-def _difficulty_proxy(text: str) -> float:
-    tokens = text.split()
-    if len(tokens) == 0:
+def _centroid_outlier_scores(embeddings: np.ndarray) -> np.ndarray:
+    centroid = np.mean(embeddings, axis=0)
+    centroid_norm = np.linalg.norm(centroid)
+    if centroid_norm == 0.0:
+        return np.zeros(embeddings.shape[0], dtype=np.float32)
+    centroid = centroid / centroid_norm
+    return 1.0 - (embeddings @ centroid)
+
+
+def _nearest_scalar_distances(values: np.ndarray, selected: np.ndarray) -> np.ndarray:
+    if selected.size == 0:
+        return np.zeros(values.shape[0], dtype=np.float32)
+    return np.min(np.abs(values[:, None] - values[selected][None, :]), axis=1)
+
+
+def _tokenize_text(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+", text.lower())
+
+
+def _missingness_ratio(record) -> float:
+    if not isinstance(record, dict):
         return 0.0
-    unique_ratio = len(set(tokens)) / len(tokens)
-    punctuation = sum(1 for ch in text if ch in ",.;:!?()[]{}")
-    punctuation_ratio = punctuation / max(1, len(text))
-    return float(0.7 * unique_ratio + 0.3 * punctuation_ratio)
+
+    total_fields = len(record)
+    if total_fields == 0:
+        return 0.0
+
+    missing_fields = 0
+    for value in record.values():
+        if value is None:
+            missing_fields += 1
+        elif isinstance(value, str) and value.strip() == "":
+            missing_fields += 1
+        elif isinstance(value, (list, tuple, set, dict)) and len(value) == 0:
+            missing_fields += 1
+
+    return float(missing_fields / total_fields)
+
+
+def _format_noise_ratio(text: str) -> float:
+    if len(text) == 0:
+        return 0.0
+
+    raw_tokens = text.split()
+    if len(raw_tokens) == 0:
+        return 0.0
+
+    symbol_ratio = sum(1 for ch in text if not ch.isalnum() and not ch.isspace()) / len(text)
+    digit_heavy_ratio = sum(
+        1
+        for token in raw_tokens
+        if len(token) > 0 and sum(ch.isdigit() for ch in token) / len(token) >= 0.5
+    ) / len(raw_tokens)
+    uppercase_ratio = sum(
+        1
+        for token in raw_tokens
+        if len(token) >= 3 and any(ch.isalpha() for ch in token) and token.upper() == token
+    ) / len(raw_tokens)
+
+    return float(0.5 * symbol_ratio + 0.3 * digit_heavy_ratio + 0.2 * uppercase_ratio)
+
+
+def _compute_generic_difficulty_scores(rows: list[object], texts: list[str]) -> np.ndarray:
+    tokenized_rows = [_tokenize_text(text) for text in texts]
+    document_frequency: dict[str, int] = {}
+    for tokens in tokenized_rows:
+        for token in set(tokens):
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+
+    scores = []
+    for row, text, tokens in zip(rows, texts, tokenized_rows, strict=False):
+        if len(tokens) == 0:
+            rare_token_ratio = 0.0
+        else:
+            rare_token_ratio = sum(1 for token in tokens if document_frequency.get(token, 0) == 1) / len(tokens)
+
+        format_noise = _format_noise_ratio(text)
+        missingness = _missingness_ratio(row)
+        scores.append(0.5 * rare_token_ratio + 0.3 * format_noise + 0.2 * missingness)
+
+    return np.asarray(scores, dtype=np.float32)
 
 
 def _texts_hash(texts: list[str]) -> str:
@@ -153,13 +237,14 @@ def _greedy_hybrid_order(
 
     length_score = _zscore(lengths)
     difficulty_score = _zscore(difficulties)
-    feature_score = beta * length_score + gamma * difficulty_score
+    embedding_seed_score = _centroid_outlier_scores(emb)
+    feature_seed_score = alpha * embedding_seed_score + beta * np.abs(length_score) + gamma * np.abs(difficulty_score)
 
     selected = []
     remaining = set(range(n))
 
-    # Select first point from feature signal.
-    first_scores = feature_score + rng.random(n) * 1e-9
+    # Select the first point from the combined outlier signal.
+    first_scores = feature_seed_score + rng.random(n) * 1e-9
     first_idx = int(np.argmax(first_scores))
     selected.append(first_idx)
     remaining.remove(first_idx)
@@ -167,8 +252,16 @@ def _greedy_hybrid_order(
     while remaining:
         rem_list = np.asarray(sorted(remaining), dtype=np.int32)
         sims = emb[rem_list] @ emb[np.asarray(selected, dtype=np.int32)].T
-        nearest_dist = 1.0 - np.max(sims, axis=1)
-        total = alpha * nearest_dist + feature_score[rem_list] + rng.random(len(rem_list)) * 1e-9
+        selected_idx = np.asarray(selected, dtype=np.int32)
+        embedding_dist = 1.0 - np.max(sims, axis=1)
+        length_dist = _nearest_scalar_distances(length_score, selected_idx)[rem_list]
+        difficulty_dist = _nearest_scalar_distances(difficulty_score, selected_idx)[rem_list]
+        total = (
+            alpha * embedding_dist
+            + beta * length_dist
+            + gamma * difficulty_dist
+            + rng.random(len(rem_list)) * 1e-9
+        )
         next_idx = int(rem_list[int(np.argmax(total))])
         selected.append(next_idx)
         remaining.remove(next_idx)
@@ -189,14 +282,19 @@ def order_source_indices_with_embedding_hybrid(
     batch_size: int = 128,
     cache_dir: str | None = None,
 ) -> list[str]:
-    """Order source indices using hybrid embedding coverage and feature-aware scoring."""
+    """Order source indices using weighted diversity coverage over embeddings, length, and difficulty."""
     if len(source_indices) <= 1:
         return source_indices
 
     rng = np.random.default_rng(seed=seed)
-    texts = _build_texts(dataset, source_indices)
+    if alpha == 0.0 and beta == 0.0 and gamma == 0.0:
+        shuffled = list(source_indices)
+        rng.shuffle(shuffled)
+        return shuffled
+
+    rows, texts = _build_rows_and_texts(dataset, source_indices)
     lengths = np.asarray([len(text) for text in texts], dtype=np.float32)
-    difficulties = np.asarray([_difficulty_proxy(text) for text in texts], dtype=np.float32)
+    difficulties = _compute_generic_difficulty_scores(rows, texts)
 
     try:
         embeddings = _get_cached_embeddings(

@@ -5,11 +5,13 @@ import time
 
 import chromadb
 import datasets
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
 
 import palimpzest as pz
 from palimpzest.constants import Model
+
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_SAMPLING_EMBEDDING_MODEL = "openai/text-embedding-3-small"
 
 biodex_entry_cols = [
     {"name": "pmid", "type": str, "desc": "The PubMed ID of the medical paper"},
@@ -29,31 +31,6 @@ biodex_reaction_labels_cols = [
 biodex_ranked_reactions_labels_cols = [
     {"name": "ranked_reaction_labels", "type": list[str], "desc": "The ranked list of medical conditions experienced by the patient. The most relevant label occurs first in the list. Be sure to rank ALL of the inputs."},
 ]
-
-
-def load_reaction_terms() -> list[str]:
-    """Load reaction terms from file or derive from BioDEX train split."""
-    reaction_terms_path = "testdata/reaction_terms.txt"
-    if os.path.exists(reaction_terms_path):
-        with open(reaction_terms_path) as f:
-            terms = [line.strip() for line in f if line.strip()]
-        if len(terms) > 0:
-            return terms
-
-    ds = datasets.load_dataset("BioDEX/BioDEX-Reactions", split="train")
-    reaction_terms_set = set()
-    for entry in ds:
-        for term in entry["reactions"].split(","):
-            normalized = term.strip().lower().replace("'", "").replace("^", "")
-            if normalized:
-                reaction_terms_set.add(normalized)
-
-    terms = sorted(reaction_terms_set)
-    os.makedirs("testdata", exist_ok=True)
-    with open(reaction_terms_path, "w") as f:
-        for term in terms:
-            f.write(f"{term}\n")
-    return terms
 
 class BiodexValidator(pz.Validator):
     def __init__(
@@ -333,70 +310,6 @@ if __name__ == "__main__":
         help="Base URL for local Ollama server.",
     )
     parser.add_argument(
-        "--stratify-by-difficulty",
-        default=False,
-        action="store_true",
-        help="MAB only: order train source indices by difficulty (tertiles + round-robin) instead of a flat shuffle.",
-    )
-    parser.add_argument(
-        "--difficulty-proxy",
-        default="token_density",
-        choices=["token_density", "ollama_disagreement"],
-        type=str,
-        help='How to score difficulty when --stratify-by-difficulty: word count on --stratify-text-column, or two-model Ollama disagreement (needs --ollama-model-b).',
-    )
-    parser.add_argument(
-        "--stratify-text-column",
-        default="abstract",
-        type=str,
-        help="Train row dict key used for difficulty scoring (biodex rows include abstract, fulltext, ...).",
-    )
-    parser.add_argument(
-        "--ollama-model-b",
-        default=None,
-        type=str,
-        help='Second Ollama model for disagreement when --difficulty-proxy=ollama_disagreement (e.g. "ollama/phi3:mini").',
-    )
-    parser.add_argument(
-        "--topk-embedding-provider",
-        default="openai",
-        choices=["openai", "local"],
-        type=str,
-        help="Embedding provider for TopK retrieval.",
-    )
-    parser.add_argument(
-        "--topk-openai-embedding-model",
-        default="text-embedding-3-small",
-        type=str,
-        help="OpenAI embedding model name when --topk-embedding-provider=openai.",
-    )
-    parser.add_argument(
-        "--topk-local-embedding-model",
-        default="all-MiniLM-L6-v2",
-        type=str,
-        help="SentenceTransformer model name when --topk-embedding-provider=local.",
-    )
-    parser.add_argument(
-        "--sampling-strategy",
-        default="random",
-        choices=["random", "embedding_hybrid"],
-        type=str,
-        help="Sampling strategy for sentinel record ordering.",
-    )
-    parser.add_argument(
-        "--sampling-embedding-provider",
-        default="openai",
-        choices=["openai", "local"],
-        type=str,
-        help="Embedding provider used by embedding-hybrid sampling.",
-    )
-    parser.add_argument(
-        "--sampling-embedding-model",
-        default="openai/text-embedding-3-small",
-        type=str,
-        help="Embedding model used by embedding-hybrid sampling.",
-    )
-    parser.add_argument(
         "--sampling-alpha",
         default=0.7,
         type=float,
@@ -420,17 +333,12 @@ if __name__ == "__main__":
         type=int,
         help="Embedding batch size for embedding-hybrid sampling.",
     )
-    parser.add_argument(
-        "--sampling-cache-dir",
-        default=None,
-        type=str,
-        help="Optional cache directory for sampling embeddings.",
-    )
-
     args = parser.parse_args()
 
     # create directory for profiling data
     os.makedirs("opt-profiling-data", exist_ok=True)
+    sampling_cache_dir = os.path.join("opt-profiling-data", "sampling-embeddings-cache")
+    os.makedirs(sampling_cache_dir, exist_ok=True)
 
     verbose = args.verbose
     progress = args.progress
@@ -487,30 +395,11 @@ if __name__ == "__main__":
 
     # load index for TopK retrieval
     chroma_client = chromadb.PersistentClient(".chroma-biodex")
-    if args.topk_embedding_provider == "openai":
-        openai_ef = OpenAIEmbeddingFunction(
-            api_key=os.environ["OPENAI_API_KEY"],
-            model_name=args.topk_openai_embedding_model,
-        )
-        index = chroma_client.get_collection("biodex-reaction-terms", embedding_function=openai_ef)
-    else:
-        local_ef = SentenceTransformerEmbeddingFunction(model_name=args.topk_local_embedding_model)
-        collection_name = "biodex-reaction-terms-local"
-        index = chroma_client.get_or_create_collection(
-            collection_name,
-            embedding_function=local_ef,
-            metadata={"hnsw:space": "cosine"},
-        )
-        if index.count() == 0:
-            reaction_terms = load_reaction_terms()
-            # Chroma has a max batch size; insert in chunks to avoid InternalError.
-            batch_size = 5000
-            for start_idx in range(0, len(reaction_terms), batch_size):
-                end_idx = min(start_idx + batch_size, len(reaction_terms))
-                index.add(
-                    documents=reaction_terms[start_idx:end_idx],
-                    ids=[f"id{idx}" for idx in range(start_idx, end_idx)],
-                )
+    openai_ef = OpenAIEmbeddingFunction(
+        api_key=os.environ["OPENAI_API_KEY"],
+        model_name=DEFAULT_EMBEDDING_MODEL,
+    )
+    index = chroma_client.get_collection("biodex-reaction-terms", embedding_function=openai_ef)
 
     def search_func(index: chromadb.Collection, query: list[list[float]], k: int) -> list[str]:
         # execute query with embeddings
@@ -569,13 +458,7 @@ if __name__ == "__main__":
         ]
 
     # execute pz plan
-    ollama_models_arg = None
-    if args.use_ollama:
-        ollama_models_arg = (
-            [args.ollama_model, args.ollama_model_b]
-            if args.ollama_model_b
-            else [args.ollama_model]
-        )
+    ollama_models_arg = [args.ollama_model] if args.use_ollama else None
 
     config = pz.QueryProcessorConfig(
         policy=policy,
@@ -598,25 +481,17 @@ if __name__ == "__main__":
         seed=seed,
         exp_name=exp_name,
         priors=priors,
-        sampling_strategy=args.sampling_strategy,
-        sampling_embedding_provider=args.sampling_embedding_provider,
-        sampling_embedding_model=args.sampling_embedding_model,
+        sampling_embedding_provider="openai",
+        sampling_embedding_model=DEFAULT_SAMPLING_EMBEDDING_MODEL,
         sampling_alpha=args.sampling_alpha,
         sampling_beta=args.sampling_beta,
         sampling_gamma=args.sampling_gamma,
         sampling_embedding_batch_size=args.sampling_embedding_batch_size,
-        sampling_cache_dir=args.sampling_cache_dir,
+        sampling_cache_dir=sampling_cache_dir,
         use_ollama=args.use_ollama,
         ollama_models=ollama_models_arg,
         ollama_api_base=args.ollama_api_base,
-<<<<<<< Updated upstream
-        allow_cascade=args.use_ollama,
-        stratify_source_indices_by_difficulty=args.stratify_by_difficulty,
-        difficulty_proxy=args.difficulty_proxy,
-        stratify_difficulty_text_column=args.stratify_text_column,
-=======
         allow_cascade=args.cascade,
->>>>>>> Stashed changes
     )
 
     data_record_collection = plan.optimize_and_run(config=config, train_dataset=train_dataset, validator=validator)

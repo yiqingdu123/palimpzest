@@ -18,61 +18,10 @@ from palimpzest.query.operators.physical import PhysicalOperator
 from palimpzest.query.operators.scan import ContextScanOp, ScanPhysicalOp
 from palimpzest.query.operators.topk import TopKOp
 from palimpzest.query.optimizer.plan import SentinelPlan
-from palimpzest.utils.ollama_disagreement import disagreement_score_for_texts
 from palimpzest.utils.progress import create_progress_manager
 from palimpzest.validator.validator import Validator
 
 logger = logging.getLogger(__name__)
-
-
-def _strip_ollama_model_tag(model: str) -> str:
-    m = model.strip()
-    if m.startswith("ollama/"):
-        return m[len("ollama/"):]
-    return m
-
-
-def _token_density_difficulty_proxy(record: dict, text_column: str = "abstract") -> float:
-    try:
-        text = record.get(text_column, str(record))
-        return float(len(str(text).split()))
-    except Exception:
-        return 0.0
-
-
-def stratify_source_indices_by_scores(
-    scored_key_score_pairs: list[tuple[str, float]],
-    rng: np.random.Generator,
-) -> list[str]:
-    """
-    Sort rows by difficulty score, assign to easy / medium / hard tertile bins, shuffle within each bin,
-    then concatenate bins in round-robin order (easy, medium, hard, easy, ...).
-    """
-    if len(scored_key_score_pairs) == 0:
-        return []
-
-    scored_indices = sorted(scored_key_score_pairs, key=lambda x: x[1])
-    n = len(scored_indices)
-
-    easy_bin = [item[0] for item in scored_indices[: n // 3]]
-    med_bin = [item[0] for item in scored_indices[n // 3 : 2 * n // 3]]
-    hard_bin = [item[0] for item in scored_indices[2 * n // 3 :]]
-
-    rng.shuffle(easy_bin)
-    rng.shuffle(med_bin)
-    rng.shuffle(hard_bin)
-
-    stratified_source_indices: list[str] = []
-    max_len = max(len(easy_bin), len(med_bin), len(hard_bin))
-    for i in range(max_len):
-        if i < len(easy_bin):
-            stratified_source_indices.append(easy_bin[i])
-        if i < len(med_bin):
-            stratified_source_indices.append(med_bin[i])
-        if i < len(hard_bin):
-            stratified_source_indices.append(hard_bin[i])
-
-    return stratified_source_indices
 
 
 # NOTE: we currently do not support Sentinel Plans with aggregates or limits which are not the final plan operator
@@ -690,31 +639,6 @@ class MABExecutionStrategy(SentinelExecutionStrategy):
     the progress manager as a result.
     """
 
-    def _difficulty_score_for_stratify(self, record: dict) -> float:
-        """Scalar difficulty for ordering train rows when ``stratify_source_indices_by_difficulty`` is True."""
-        col = self.stratify_difficulty_text_column
-        if self.difficulty_proxy == "ollama_disagreement":
-            models = self.ollama_models or []
-            if len(models) < 2:
-                logger.warning(
-                    "difficulty_proxy=ollama_disagreement needs at least two entries in ollama_models; "
-                    "falling back to token_density for stratification."
-                )
-                return _token_density_difficulty_proxy(record, col)
-            task = self.ollama_disagreement_task_instruction
-            if task is None:
-                task = "Extract the primary medical condition:"
-            raw = record.get(col)
-            text = str(record) if raw is None else str(raw)
-            return disagreement_score_for_texts(
-                text,
-                _strip_ollama_model_tag(models[0]),
-                _strip_ollama_model_tag(models[1]),
-                task_instruction=task,
-                api_base=self.ollama_api_base,
-            )
-        return _token_density_difficulty_proxy(record, col)
-
     def _remove_filtered_records_from_downstream_ops(self, topo_idx: int, plan: SentinelPlan, op_frontiers: dict[str, OpFrontier], source_indices_to_all_record_sets: dict[int, list[DataRecordSet]]) -> None:
         """Remove records which were filtered out by a NonLLMFilter from all downstream operators."""
         filtered_source_indices = set()
@@ -876,38 +800,22 @@ class MABExecutionStrategy(SentinelExecutionStrategy):
 
         dataset_id_to_shuffled_source_indices = {}
         for dataset_id, dataset in train_dataset.items():
-            if self.stratify_source_indices_by_difficulty:
-                # Stratify by difficulty (easy / medium / hard tertiles), shuffle within bin, then round-robin
-                # interleave bins so sequential MAB samples see balanced difficulty.
-                scored_indices: list[tuple[str, float]] = []
-                for idx in range(len(dataset)):
-                    record = dataset[idx]
-                    score = self._difficulty_score_for_stratify(record)
-                    scored_indices.append((f"{dataset_id}---{int(idx)}", score))
-
-                dataset_id_to_shuffled_source_indices[dataset_id] = stratify_source_indices_by_scores(
-                    scored_indices, self.rng
-                )
-            else:
-                total_num_samples = len(dataset)
-                shuffled_source_indices = [f"{dataset_id}---{int(idx)}" for idx in np.arange(total_num_samples)]
-                if self.sampling_strategy == "embedding_hybrid":
-                    shuffled_source_indices = order_source_indices_with_embedding_hybrid(
-                        dataset_id=dataset_id,
-                        dataset=dataset,
-                        source_indices=shuffled_source_indices,
-                        seed=self.seed,
-                        embedding_provider=self.sampling_embedding_provider,
-                        embedding_model=self.sampling_embedding_model,
-                        alpha=self.sampling_alpha,
-                        beta=self.sampling_beta,
-                        gamma=self.sampling_gamma,
-                        batch_size=self.sampling_embedding_batch_size,
-                        cache_dir=self.sampling_cache_dir,
-                    )
-                else:
-                    self.rng.shuffle(shuffled_source_indices)
-                dataset_id_to_shuffled_source_indices[dataset_id] = shuffled_source_indices
+            total_num_samples = len(dataset)
+            shuffled_source_indices = [f"{dataset_id}---{int(idx)}" for idx in np.arange(total_num_samples)]
+            shuffled_source_indices = order_source_indices_with_embedding_hybrid(
+                dataset_id=dataset_id,
+                dataset=dataset,
+                source_indices=shuffled_source_indices,
+                seed=self.seed,
+                embedding_provider=self.sampling_embedding_provider,
+                embedding_model=self.sampling_embedding_model,
+                alpha=self.sampling_alpha,
+                beta=self.sampling_beta,
+                gamma=self.sampling_gamma,
+                batch_size=self.sampling_embedding_batch_size,
+                cache_dir=self.sampling_cache_dir,
+            )
+            dataset_id_to_shuffled_source_indices[dataset_id] = shuffled_source_indices
 
         # initialize frontier for each logical operator
         op_frontiers = {}

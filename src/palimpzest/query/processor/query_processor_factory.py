@@ -147,9 +147,6 @@ class QueryProcessorFactory:
         if len(config.available_models) == 0:
             raise ValueError("No available models found.")
 
-        if config.sampling_strategy not in ["random", "embedding_hybrid"]:
-            raise ValueError("sampling_strategy must be one of ['random', 'embedding_hybrid']")
-
         if config.sampling_embedding_provider not in ["openai", "local"]:
             raise ValueError("sampling_embedding_provider must be one of ['openai', 'local']")
 
