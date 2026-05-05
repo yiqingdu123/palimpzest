@@ -147,6 +147,12 @@ class QueryProcessorFactory:
         if len(config.available_models) == 0:
             raise ValueError("No available models found.")
 
+        if config.sampling_strategy not in ["random", "embedding_hybrid"]:
+            raise ValueError("sampling_strategy must be one of ['random', 'embedding_hybrid']")
+
+        if config.sampling_embedding_provider not in ["openai", "local"]:
+            raise ValueError("sampling_embedding_provider must be one of ['openai', 'local']")
+
         openai_key = os.getenv("OPENAI_API_KEY")
         azure_key = os.getenv("AZURE_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
         anthropic_key = os.getenv("ANTHROPIC_API_KEY")

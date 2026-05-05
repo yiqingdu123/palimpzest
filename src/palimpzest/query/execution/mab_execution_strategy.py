@@ -8,6 +8,7 @@ from palimpzest.core.data.dataset import Dataset
 from palimpzest.core.elements.records import DataRecord, DataRecordSet
 from palimpzest.core.models import OperatorCostEstimates, OperatorStats, RecordOpStats, SentinelPlanStats
 from palimpzest.policy import Policy
+from palimpzest.query.execution.embedding_sampler import order_source_indices_with_embedding_hybrid
 from palimpzest.query.execution.execution_strategy import SentinelExecutionStrategy
 from palimpzest.query.operators.aggregate import AggregateOp
 from palimpzest.query.operators.convert import LLMConvert
@@ -800,7 +801,22 @@ class MABExecutionStrategy(SentinelExecutionStrategy):
         for dataset_id, dataset in train_dataset.items():
             total_num_samples = len(dataset)
             shuffled_source_indices = [f"{dataset_id}---{int(idx)}" for idx in np.arange(total_num_samples)]
-            self.rng.shuffle(shuffled_source_indices)
+            if self.sampling_strategy == "embedding_hybrid":
+                shuffled_source_indices = order_source_indices_with_embedding_hybrid(
+                    dataset_id=dataset_id,
+                    dataset=dataset,
+                    source_indices=shuffled_source_indices,
+                    seed=self.seed,
+                    embedding_provider=self.sampling_embedding_provider,
+                    embedding_model=self.sampling_embedding_model,
+                    alpha=self.sampling_alpha,
+                    beta=self.sampling_beta,
+                    gamma=self.sampling_gamma,
+                    batch_size=self.sampling_embedding_batch_size,
+                    cache_dir=self.sampling_cache_dir,
+                )
+            else:
+                self.rng.shuffle(shuffled_source_indices)
             dataset_id_to_shuffled_source_indices[dataset_id] = shuffled_source_indices
 
         # initialize frontier for each logical operator

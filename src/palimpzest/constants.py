@@ -208,7 +208,8 @@ class Model:
         else:
             self.model_specs = self.metrics_manager.get_model_metrics(model_id)
             if not self.model_specs:
-                raise ValueError("Palimpzest currently does not contain information about this model.")
+                # Fall back to locally predicted metrics so imports and offline runs remain usable.
+                self.model_specs = predict_local_model_metrics(model_id)
 
         Model._registry[model_id] = self
 

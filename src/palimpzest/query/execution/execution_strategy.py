@@ -92,6 +92,14 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         seed: int = 42,
         exp_name: str | None = None,
         dont_use_priors: bool = False,
+        sampling_strategy: str = "random",
+        sampling_embedding_provider: str = "openai",
+        sampling_embedding_model: str = "openai/text-embedding-3-small",
+        sampling_alpha: float = 0.7,
+        sampling_beta: float = 0.3,
+        sampling_gamma: float = 0.0,
+        sampling_embedding_batch_size: int = 128,
+        sampling_cache_dir: str | None = None,
         *args,
         **kwargs,
     ):
@@ -107,6 +115,14 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         self.rng = np.random.default_rng(seed=seed)
         self.exp_name = exp_name
         self.dont_use_priors = dont_use_priors
+        self.sampling_strategy = sampling_strategy
+        self.sampling_embedding_provider = sampling_embedding_provider
+        self.sampling_embedding_model = sampling_embedding_model
+        self.sampling_alpha = sampling_alpha
+        self.sampling_beta = sampling_beta
+        self.sampling_gamma = sampling_gamma
+        self.sampling_embedding_batch_size = sampling_embedding_batch_size
+        self.sampling_cache_dir = sampling_cache_dir
 
         # general cache which maps hash(logical_op_id, phys_op_id, hash(input)) --> record_set
         self.cache: dict[int, DataRecordSet] = {}

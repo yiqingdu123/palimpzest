@@ -57,6 +57,14 @@ class QueryProcessorConfig(BaseModel):
     exp_name: str | None = Field(default=None)
     priors: dict | None = Field(default=None)
     dont_use_priors: bool = Field(default=False)
+    sampling_strategy: str = Field(default="random")  # one of: random, embedding_hybrid
+    sampling_embedding_provider: str = Field(default="openai")  # one of: openai, local
+    sampling_embedding_model: str = Field(default="openai/text-embedding-3-small")
+    sampling_alpha: float = Field(default=0.7)
+    sampling_beta: float = Field(default=0.3)
+    sampling_gamma: float = Field(default=0.0)
+    sampling_embedding_batch_size: int = Field(default=128)
+    sampling_cache_dir: str | None = Field(default=None)
 
     def to_dict(self) -> dict:
         """Convert the config to a dict representation."""
