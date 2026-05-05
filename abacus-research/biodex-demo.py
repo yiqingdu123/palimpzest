@@ -245,6 +245,16 @@ if __name__ == "__main__":
         help="Number of validation examples to sample from",
     )
     parser.add_argument(
+        "--plan-examples",
+        default=250,
+        type=int,
+        metavar="N",
+        help=(
+            "BioDEX test-split rows for the main plan and RP@k scoring (same RNG seed as --seed). "
+            "Use a small N (e.g. 15–40) for fast local runs; default 250 matches full-scale experiments."
+        ),
+    )
+    parser.add_argument(
         "--model",
         default="gpt-4o",
         type=str,
@@ -420,6 +430,7 @@ if __name__ == "__main__":
     progress = args.progress
     seed = args.seed
     val_examples = args.val_examples
+    plan_examples = args.plan_examples
     k = args.k
     j = args.j
     sample_budget = args.sample_budget
@@ -521,7 +532,7 @@ if __name__ == "__main__":
         return {"reaction_labels": final_sorted_results[:k]}
 
     # construct plan
-    plan = BiodexDataset(split="test", num_samples=250, shuffle=True, seed=seed)
+    plan = BiodexDataset(split="test", num_samples=plan_examples, shuffle=True, seed=seed)
     plan = plan.sem_map(biodex_reactions_cols)
     plan = plan.sem_topk(
         index=index,
@@ -628,7 +639,7 @@ if __name__ == "__main__":
 
     # score output
     test_dataset = datasets.load_dataset("BioDEX/BioDEX-Reactions", split="test").to_pandas()
-    test_dataset = test_dataset.sample(n=250, random_state=seed).to_dict(orient="records")
+    test_dataset = test_dataset.sample(n=plan_examples, random_state=seed).to_dict(orient="records")
 
     # construct mapping from pmid --> label (field, value) pairs
     def compute_target_record(entry):
