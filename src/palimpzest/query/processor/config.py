@@ -57,6 +57,22 @@ class QueryProcessorConfig(BaseModel):
     exp_name: str | None = Field(default=None)
     priors: dict | None = Field(default=None)
     dont_use_priors: bool = Field(default=False)
+    stratify_source_indices_by_difficulty: bool = Field(
+        default=False,
+        description="If True (MAB sentinel only), order train rows by difficulty tertiles and round-robin; if False, shuffle indices as before.",
+    )
+    difficulty_proxy: str = Field(
+        default="token_density",
+        description='How to score rows when stratifying: "token_density" (cheap) or "ollama_disagreement" (first two ollama_models).',
+    )
+    stratify_difficulty_text_column: str = Field(
+        default="abstract",
+        description="Dataset dict key whose text is used for difficulty scoring when stratifying.",
+    )
+    ollama_disagreement_task_instruction: str | None = Field(
+        default=None,
+        description="Prompt prefix for two-model disagreement; None uses the default in ollama_disagreement.",
+    )
 
     def to_dict(self) -> dict:
         """Convert the config to a dict representation."""

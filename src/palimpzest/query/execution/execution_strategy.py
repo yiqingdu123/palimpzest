@@ -92,6 +92,12 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         seed: int = 42,
         exp_name: str | None = None,
         dont_use_priors: bool = False,
+        stratify_source_indices_by_difficulty: bool = False,
+        difficulty_proxy: str = "token_density",
+        stratify_difficulty_text_column: str = "abstract",
+        ollama_disagreement_task_instruction: str | None = None,
+        ollama_models: list[str] | None = None,
+        ollama_api_base: str = "http://localhost:11434",
         *args,
         **kwargs,
     ):
@@ -107,6 +113,12 @@ class SentinelExecutionStrategy(BaseExecutionStrategy, ABC):
         self.rng = np.random.default_rng(seed=seed)
         self.exp_name = exp_name
         self.dont_use_priors = dont_use_priors
+        self.stratify_source_indices_by_difficulty = stratify_source_indices_by_difficulty
+        self.difficulty_proxy = difficulty_proxy
+        self.stratify_difficulty_text_column = stratify_difficulty_text_column
+        self.ollama_disagreement_task_instruction = ollama_disagreement_task_instruction
+        self.ollama_models = ollama_models
+        self.ollama_api_base = ollama_api_base
 
         # general cache which maps hash(logical_op_id, phys_op_id, hash(input)) --> record_set
         self.cache: dict[int, DataRecordSet] = {}

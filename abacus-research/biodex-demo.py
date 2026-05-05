@@ -317,6 +317,31 @@ if __name__ == "__main__":
         help="Base URL for local Ollama server.",
     )
     parser.add_argument(
+        "--stratify-by-difficulty",
+        default=False,
+        action="store_true",
+        help="MAB only: order train source indices by difficulty (tertiles + round-robin) instead of a flat shuffle.",
+    )
+    parser.add_argument(
+        "--difficulty-proxy",
+        default="token_density",
+        choices=["token_density", "ollama_disagreement"],
+        type=str,
+        help='How to score difficulty when --stratify-by-difficulty: word count on --stratify-text-column, or two-model Ollama disagreement (needs --ollama-model-b).',
+    )
+    parser.add_argument(
+        "--stratify-text-column",
+        default="abstract",
+        type=str,
+        help="Train row dict key used for difficulty scoring (biodex rows include abstract, fulltext, ...).",
+    )
+    parser.add_argument(
+        "--ollama-model-b",
+        default=None,
+        type=str,
+        help='Second Ollama model for disagreement when --difficulty-proxy=ollama_disagreement (e.g. "ollama/phi3:mini").',
+    )
+    parser.add_argument(
         "--topk-embedding-provider",
         default="openai",
         choices=["openai", "local"],
@@ -477,6 +502,14 @@ if __name__ == "__main__":
         ]
 
     # execute pz plan
+    ollama_models_arg = None
+    if args.use_ollama:
+        ollama_models_arg = (
+            [args.ollama_model, args.ollama_model_b]
+            if args.ollama_model_b
+            else [args.ollama_model]
+        )
+
     config = pz.QueryProcessorConfig(
         policy=policy,
         optimizer_strategy="pareto",
@@ -499,9 +532,12 @@ if __name__ == "__main__":
         exp_name=exp_name,
         priors=priors,
         use_ollama=args.use_ollama,
-        ollama_models=[args.ollama_model] if args.use_ollama else None,
+        ollama_models=ollama_models_arg,
         ollama_api_base=args.ollama_api_base,
         allow_cascade=args.use_ollama,
+        stratify_source_indices_by_difficulty=args.stratify_by_difficulty,
+        difficulty_proxy=args.difficulty_proxy,
+        stratify_difficulty_text_column=args.stratify_text_column,
     )
 
     data_record_collection = plan.optimize_and_run(config=config, train_dataset=train_dataset, validator=validator)
