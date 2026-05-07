@@ -376,6 +376,19 @@ if __name__ == "__main__":
     if os.getenv("OPENAI_API_KEY") is None and os.getenv("TOGETHER_API_KEY") is None and os.getenv("ANTHROPIC_API_KEY") is None:
         print("WARNING: OPENAI_API_KEY, TOGETHER_API_KEY, and ANTHROPIC_API_KEY are unset")
 
+    if args.openai_only and os.getenv("OPENAI_API_KEY") is None:
+        raise SystemExit(
+            "runs-cascade / --openai-only requires OPENAI_API_KEY for OpenAI completions, sampling embeddings "
+            "(MAB reorder), and the Chroma OpenAI embedding_fn. Without it LiteLLM errors on every call and "
+            "`ranked_reaction_labels` stays empty."
+        )
+
+    if args.use_ollama:
+        print(
+            f"NOTE: Ensure Ollama is running at {args.ollama_api_base} with the model pulled "
+            f"(e.g. `ollama pull llama3.2:3b`). Cascade retries with GPT when the local parse fails."
+        )
+
     # create validator
     validator = BiodexValidator(
         rp_at_k=5,
